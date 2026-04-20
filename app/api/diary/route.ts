@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import prisma from "@/lib/prisma";
 
 export async function GET() {
   try {
@@ -21,8 +19,6 @@ export async function GET() {
   } catch (error: any) {
     console.error("[DIARY GET]", error.message);
     return NextResponse.json({ error: "获取日记失败" }, { status: 500 });
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
@@ -54,8 +50,6 @@ export async function POST(req: Request) {
   } catch (error: any) {
     console.error("[DIARY POST]", error.message);
     return NextResponse.json({ error: "创建日记失败" }, { status: 500 });
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
@@ -96,8 +90,6 @@ export async function PUT(req: Request) {
   } catch (error: any) {
     console.error("[DIARY PUT]", error.message);
     return NextResponse.json({ error: "更新日记失败" }, { status: 500 });
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
@@ -129,7 +121,5 @@ export async function DELETE(req: Request) {
   } catch (error: any) {
     console.error("[DIARY DELETE]", error.message);
     return NextResponse.json({ error: "删除日记失败" }, { status: 500 });
-  } finally {
-    await prisma.$disconnect();
   }
 }

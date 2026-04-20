@@ -17,7 +17,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="title" content={metadata.title} />
         {/* 其他头部内容 */}
       </head>
-      <body className={inter.className}>
+      <body className={inter.className} suppressHydrationWarning>
         <SessionProvider>
           <AppLayout>{children}</AppLayout>
         </SessionProvider>

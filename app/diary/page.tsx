@@ -92,17 +92,25 @@ export default function DiaryPage() {
     }
   }, [status]);
 
-  const fetchDiaries = async () => {
+  const fetchDiaries = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     try {
-      const res = await fetch("/api/diary");
+      const res = await fetch("/api/diary", { cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
-        setDiaries(Array.isArray(data) ? data : []);
+        console.log("获取日记数据:", data);
+        const newDiaries = Array.isArray(data) ? data : [];
+        setDiaries(newDiaries);
+        // 强制刷新组件
+        setExpandedId(null);
+      } else {
+        console.error("获取日记失败:", res.status);
       }
-    } catch {
+    } catch (error) {
+      console.error("获取日记异常:", error);
       setDiaries([]);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -146,8 +154,8 @@ export default function DiaryPage() {
 
       if (res.ok) {
         showToast("success", editingId ? "日记已更新" : "日记已创建");
+        await fetchDiaries(false);
         resetForm();
-        fetchDiaries();
       } else {
         const data = await res.json().catch(() => ({}));
         showToast("error", data.error || "保存失败");
@@ -328,19 +336,13 @@ export default function DiaryPage() {
             <p className="text-gray-300 text-sm">开始记录你的第一篇旅行日记吧</p>
           </motion.div>
         ) : (
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
-            className="space-y-4"
-          >
+          <div className="space-y-4">
             {diaries.map((diary) => {
               const isExpanded = expandedId === diary.id;
 
               return (
-                <motion.div
+                <div
                   key={diary.id}
-                  variants={itemVariants}
                   className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow group"
                 >
                   <div
@@ -418,10 +420,10 @@ export default function DiaryPage() {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </motion.div>
+                </div>
               );
             })}
-          </motion.div>
+          </div>
         )}
       </div>
 

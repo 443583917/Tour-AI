@@ -38,7 +38,7 @@
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/3.png?raw=true)
 
-## 1. 输入地址获取景点推荐
+## 1. 景点推荐
 
 在首页输入城市名称，选择旅行天数和兴趣偏好，AI 为你智能生成个性化行程攻略。
 
@@ -46,7 +46,7 @@
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/5.png?raw=true)
 
-## 2. 点击地图获取景点推荐
+## 2. 路线规划
 
 在创建行程页面，通过交互式地图选择目的地，AI 为你规划专属旅行路线。
 
@@ -56,7 +56,7 @@
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/8.png?raw=true)
 
-## 3. AI 智能助手
+## 3. AI 助手
 
 专业的旅行 AI 助手，提供实时旅行咨询、景点推荐、美食建议等服务，支持流式对话。
 
@@ -64,7 +64,7 @@
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/9.png?raw=true)
 
-## 4. 小红书链接解析
+## 4. 笔记解析
 
 输入小红书分享链接，自动解析并提取旅游内容，快速获取他人分享的旅行攻略。
 
@@ -88,19 +88,19 @@
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/15.png?raw=true)
 
-## 6. 定价方案
+## 7. 定价方案
 
 随时订阅解锁更多功能。
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/17.png?raw=true)
 
-## 6. 联系我们
+## 8. 联系我们
 
 发送功能建议、商务合作还是技术反馈，提供支持。
 
 ![image-20250407210836236](https://github.com/dwsera/project_01/blob/main/18.png?raw=true)
 
-## 7. 个人中心
+## 9. 个人中心
 
 管理个人资料，修改用户名、简介和密码，查看账户信息。
 

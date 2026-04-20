@@ -88,12 +88,83 @@ export async function POST(req: Request) {
 
     const data = await response.json();
     let jsonBody = data.choices?.[0]?.message?.content || "";
+    
+    console.log("[XHS ANALYZE] AI原始返回:", jsonBody.substring(0, 500));
 
+    // 移除 markdown 代码块标记
     jsonBody = jsonBody.replace(/```json/g, "").replace(/```/g, "").trim();
-    const match = jsonBody.match(/{[\s\S]*}/);
-    if (!match) throw new Error("AI返回的数据格式无效，无法解析为JSON");
+    
+    // 尝试找到 JSON 的开始和结束位置
+    let jsonStr = "";
+    const firstBrace = jsonBody.indexOf('{');
+    const lastBrace = jsonBody.lastIndexOf('}');
+    
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      jsonStr = jsonBody.substring(firstBrace, lastBrace + 1);
+    } else {
+      throw new Error("AI返回的数据格式无效，无法解析为JSON");
+    }
 
-    const parsedJson = JSON.parse(match[0]);
+    // 强大的 JSON 清理函数
+    function cleanJsonString(str: string): string {
+      // 移除所有控制字符（保留换行、制表符）
+      str = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+      
+      // 修复尾随逗号（对象和数组）
+      str = str.replace(/,\s*([}\]])/g, '$1');
+      
+      // 修复缺少逗号的情况（简单启发式）
+      str = str.replace(/}(\s*){/g, '},$1{');
+      str = str.replace(/](\s*)\[/g, '],$1[');
+      str = str.replace(/}(\s*)\[/g, '},$1[');
+      str = str.replace(/](\s*){/g, '],$1{');
+      
+      // 修复单引号为双引号
+      str = str.replace(/'/g, '"');
+      
+      // 修复无引号的键名（简单情况）
+      str = str.replace(/([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)/g, '$1"$2"$3');
+      
+      return str;
+    }
+    
+    let parsedJson: any;
+    try {
+      // 第一次尝试直接解析
+      parsedJson = JSON.parse(jsonStr);
+    } catch (parseError: any) {
+      console.error("[XHS ANALYZE] 第一次JSON解析失败:", parseError.message);
+      
+      try {
+        // 第二次尝试清理后解析
+        const cleanedStr = cleanJsonString(jsonStr);
+        console.log("[XHS ANALYZE] 清理后的JSON:", cleanedStr.substring(0, 300));
+        parsedJson = JSON.parse(cleanedStr);
+      } catch (cleanError: any) {
+        console.error("[XHS ANALYZE] 清理后仍解析失败:", cleanError.message);
+        
+        // 第三次尝试：手动构建有效JSON
+        try {
+          // 提取关键字段使用正则
+          const cityMatch = jsonBody.match(/"city"\s*:\s*"([^"]+)"/);
+          const summaryMatch = jsonBody.match(/"summary"\s*:\s*"([^"]+)"/);
+          
+          if (cityMatch) {
+            // 构建最小有效JSON
+            parsedJson = {
+              city: cityMatch[1],
+              summary: summaryMatch ? summaryMatch[1] : "旅行攻略",
+              data: []
+            };
+            console.log("[XHS ANALYZE] 使用正则提取构建JSON");
+          } else {
+            throw new Error("无法从AI返回中提取有效数据");
+          }
+        } catch (finalError) {
+          throw new Error(`JSON解析失败: ${parseError.message}`);
+        }
+      }
+    }
 
     if (!parsedJson.city || !Array.isArray(parsedJson.data)) {
       throw new Error("AI返回的数据缺少必要字段（city或data）");
