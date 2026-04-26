@@ -1,7 +1,18 @@
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
-import puppeteer from "puppeteer";
+
+// 根据环境选择 puppeteer 导入方式
+const isVercel = process.env.VERCEL === "1";
+let puppeteer: any;
+let chromium: any;
+
+if (isVercel) {
+  puppeteer = require("puppeteer-core");
+  chromium = require("@sparticuz/chromium");
+} else {
+  puppeteer = require("puppeteer");
+}
 
 const S_BOX = [
   108, 71, 200, 252, 102, 41, 228, 110, 198, 188, 243, 68, 179, 10, 96, 53,
@@ -245,14 +256,16 @@ async function initBrowser() {
   if (_browser && _page) return;
 
   _browser = await puppeteer.launch({
-    headless: true,
-    args: [
+    args: isVercel ? chromium?.args : [
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--disable-web-security",
     ],
+    defaultViewport: isVercel ? chromium?.defaultViewport : undefined,
+    executablePath: isVercel ? await chromium.executablePath() : undefined,
+    headless: isVercel ? chromium?.headless : true,
   });
 
   _page = await _browser.newPage();
@@ -283,123 +296,133 @@ export async function navigateAndExtract(noteUrl: string, cookie: string): Promi
   type: string;
   noteId: string;
 }> {
-  if (!_initPromise) {
-    _initPromise = initBrowser();
-  }
-  await _initPromise;
+  // 总体超时控制：45秒
+  const TIMEOUT_MS = 45000;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('小红书提取总体超时')), TIMEOUT_MS);
+  });
 
-  if (!_page) {
-    throw new Error("浏览器页面未初始化");
-  }
+  const extractTask = async () => {
+    if (!_initPromise) {
+      _initPromise = initBrowser();
+    }
+    await _initPromise;
 
-  const cookiePairs = cookie.split(";").map((s) => s.trim()).filter(Boolean);
-  for (const pair of cookiePairs) {
-    const eqIdx = pair.indexOf("=");
-    if (eqIdx > 0) {
-      const name = pair.substring(0, eqIdx).trim();
-      const value = pair.substring(eqIdx + 1).trim();
-      await _page.setCookie({
-        name,
-        value,
-        domain: ".xiaohongshu.com",
-        path: "/",
+    if (!_page) {
+      throw new Error("浏览器页面未初始化");
+    }
+
+    const cookiePairs = cookie.split(";").map((s) => s.trim()).filter(Boolean);
+    for (const pair of cookiePairs) {
+      const eqIdx = pair.indexOf("=");
+      if (eqIdx > 0) {
+        const name = pair.substring(0, eqIdx).trim();
+        const value = pair.substring(eqIdx + 1).trim();
+        await _page.setCookie({
+          name,
+          value,
+          domain: ".xiaohongshu.com",
+          path: "/",
+        });
+      }
+    }
+
+    let apiImages: string[] = [];
+    let apiType = "normal";
+
+    await _page.goto(noteUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 25000,
+    });
+
+    try {
+      await _page.waitForSelector("#detail-title, #detail-desc, .note-container, .content", {
+        timeout: 10000,
       });
+    } catch {
+      await _page.waitForTimeout(2000);
     }
-  }
 
-  let apiImages: string[] = [];
-  let apiType = "normal";
-
-  await _page.goto(noteUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 30000,
-  });
-
-  try {
-    await _page.waitForSelector("#detail-title, #detail-desc, .note-container, .content", {
-      timeout: 15000,
-    });
-  } catch {
-    await _page.waitForTimeout(3000);
-  }
-
-  try {
-    const stateData = await _page.evaluate(() => {
-      const state = (window as any).__INITIAL_STATE__;
-      if (!state) return null;
-      const note = state?.note?.noteDetailMap;
-      if (!note) return null;
-      const firstKey = Object.keys(note)[0];
-      const noteData = note[firstKey]?.note;
-      if (!noteData) return null;
-      const images = noteData.imageList
-        ? noteData.imageList.map((img: any) =>
-            img.urlDefault || img.urlPre || img.infoList?.[0]?.url || img.url || ""
-          ).filter(Boolean)
-        : [];
-      const type = noteData.type || "normal";
-      return { images, type };
-    });
-    if (stateData) {
-      apiImages = stateData.images;
-      apiType = stateData.type;
-    }
-  } catch (e: any) {
-    console.log("[XHS INITIAL_STATE] error:", e.message);
-  }
-
-  const result = await _page.evaluate(() => {
-    const title =
-      (document.querySelector("#detail-title") as HTMLElement)?.innerText?.trim() ||
-      document.querySelector("meta[property='og:title']")?.getAttribute("content") ||
-      "";
-    const desc =
-      (document.querySelector("#detail-desc") as HTMLElement)?.innerText?.trim() ||
-      document.querySelector("meta[property='og:description']")?.getAttribute("content") ||
-      "";
-    const type =
-      document.querySelector(".video-container") ? "video" : "normal";
-
-    const images: string[] = [];
-    const imgElements = document.querySelectorAll(".slide-item img, .note-image img, .swiper-slide img, .content img, .note-image-mask img, .image-container img, [class*='image'] img, [class*='slide'] img, [class*='carousel'] img");
-    for (const img of imgElements) {
-      const src = img.getAttribute("src") || img.getAttribute("data-src") || img.getAttribute("data-original") || "";
-      if (src && !src.startsWith("data:") && !images.includes(src)) {
-        images.push(src);
+    try {
+      const stateData = await _page.evaluate(() => {
+        const state = (window as any).__INITIAL_STATE__;
+        if (!state) return null;
+        const note = state?.note?.noteDetailMap;
+        if (!note) return null;
+        const firstKey = Object.keys(note)[0];
+        const noteData = note[firstKey]?.note;
+        if (!noteData) return null;
+        const images = noteData.imageList
+          ? noteData.imageList.map((img: any) =>
+              img.urlDefault || img.urlPre || img.infoList?.[0]?.url || img.url || ""
+            ).filter(Boolean)
+          : [];
+        const type = noteData.type || "normal";
+        return { images, type };
+      });
+      if (stateData) {
+        apiImages = stateData.images;
+        apiType = stateData.type;
       }
+    } catch (e: any) {
+      console.log("[XHS INITIAL_STATE] error:", e.message);
     }
 
-    if (images.length === 0) {
-      const ogImages = document.querySelectorAll("meta[property='og:image']");
-      for (const meta of ogImages) {
-        const content = meta.getAttribute("content");
-        if (content) images.push(content);
+    const result = await _page.evaluate(() => {
+      const title =
+        (document.querySelector("#detail-title") as HTMLElement)?.innerText?.trim() ||
+        document.querySelector("meta[property='og:title']")?.getAttribute("content") ||
+        "";
+      const desc =
+        (document.querySelector("#detail-desc") as HTMLElement)?.innerText?.trim() ||
+        document.querySelector("meta[property='og:description']")?.getAttribute("content") ||
+        "";
+      const type =
+        document.querySelector(".video-container") ? "video" : "normal";
+
+      const images: string[] = [];
+      const imgElements = document.querySelectorAll(".slide-item img, .note-image img, .swiper-slide img, .content img, .note-image-mask img, .image-container img, [class*='image'] img, [class*='slide'] img, [class*='carousel'] img");
+      for (const img of imgElements) {
+        const src = img.getAttribute("src") || img.getAttribute("data-src") || img.getAttribute("data-original") || "";
+        if (src && !src.startsWith("data:") && !images.includes(src)) {
+          images.push(src);
+        }
       }
+
+      if (images.length === 0) {
+        const ogImages = document.querySelectorAll("meta[property='og:image']");
+        for (const meta of ogImages) {
+          const content = meta.getAttribute("content");
+          if (content) images.push(content);
+        }
+      }
+
+      const noteIdMatch = window.location.pathname.match(/\/(?:explore|note|discovery\/item)\/([a-zA-Z0-9]+)/);
+      const noteId = noteIdMatch ? noteIdMatch[1] : "";
+
+      return { title, desc, images, type, noteId };
+    });
+
+    if (apiImages.length > 0) {
+      result.images = apiImages;
+    }
+    if (apiType !== "normal") {
+      result.type = apiType;
     }
 
-    const noteIdMatch = window.location.pathname.match(/\/(?:explore|note|discovery\/item)\/([a-zA-Z0-9]+)/);
-    const noteId = noteIdMatch ? noteIdMatch[1] : "";
+    console.log("[XHS DOM EXTRACT]", JSON.stringify(result).slice(0, 2000));
 
-    return { title, desc, images, type, noteId };
-  });
+    if (!result.title && !result.desc) {
+      const pageContent = await _page.evaluate(() => {
+        return document.body?.innerText?.slice(0, 500) || "";
+      });
+      console.log("[XHS DOM FALLBACK] page content:", pageContent);
+    }
 
-  if (apiImages.length > 0) {
-    result.images = apiImages;
-  }
-  if (apiType !== "normal") {
-    result.type = apiType;
-  }
+    return result;
+  };
 
-  console.log("[XHS DOM EXTRACT]", JSON.stringify(result).slice(0, 2000));
-
-  if (!result.title && !result.desc) {
-    const pageContent = await _page.evaluate(() => {
-      return document.body?.innerText?.slice(0, 500) || "";
-    });
-    console.log("[XHS DOM FALLBACK] page content:", pageContent);
-  }
-
-  return result;
+  return Promise.race([extractTask(), timeoutPromise]);
 }
 
 export async function closeBrowser() {

@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "app/api/getTourismGuide/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

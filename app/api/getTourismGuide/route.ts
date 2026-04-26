@@ -1,8 +1,8 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import { PrismaClient } from "@prisma/client";
 import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth"; // 修改为正确的路径
-const prisma = new PrismaClient();
+import { authOptions } from "@/lib/auth";
+import prisma from "@/lib/prisma";
 
 const IFLYTEK_API_KEY = process.env.IFLYTEK_API_KEY;
 const IFLYTEK_API_SECRET = process.env.IFLYTEK_API_SECRET;
@@ -11,6 +11,7 @@ const APIPassword = process.env.APIPassword;
 const IMAGE_API_ID = process.env.IMAGE_API_ID;
 const IMAGE_API_KEY = process.env.IMAGE_API_KEY;
 const QWEN_API_KEY = process.env.QWEN_API_KEY;
+
 interface Place {
   name: string;
   description: string;
@@ -24,6 +25,31 @@ interface Place {
   tips?: string;
 }
 
+// 图片缓存 - 避免重复请求
+const imageCache = new Map<string, string>();
+
+// 带超时的 fetch 工具函数
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit = {},
+  timeout = 55000
+) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+};
+
 // 获取推荐景点（千问 API）
 const getRecommendedPlacesFromQwen = async (
   city: string,
@@ -33,7 +59,7 @@ const getRecommendedPlacesFromQwen = async (
   console.log("请求千问API：", { city, days, keyword });
 
   try {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
       {
         method: "POST",
@@ -42,7 +68,7 @@ const getRecommendedPlacesFromQwen = async (
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          model: "qwen3.5-plus",
+          model: "qwen-turbo",
           messages: [
             {
               role: "system",
@@ -104,12 +130,12 @@ const getRecommendedPlacesFromQwen = async (
 ]`,
             },
           ],
-          max_tokens: 2048,
+          max_tokens: 1500,
+          temperature: 0.7,
         }),
       }
     );
 
-    // 检查响应状态
     if (!response.ok) {
       throw new Error(`千问 API 请求失败，状态码: ${response.status}`);
     }
@@ -117,7 +143,6 @@ const getRecommendedPlacesFromQwen = async (
     const data = await response.json();
     console.log("千问完整响应:", data);
 
-    // 检查响应数据是否有效
     if (!data || !data.choices || !data.choices[0]?.message?.content) {
       throw new Error("千问 API 返回的数据无效或为空");
     }
@@ -177,71 +202,116 @@ const getRecommendedPlacesFromQwen = async (
   }
 };
 
-// 获取景点图片（优先高德，超限时使用备用API）
+// 获取景点图片（带缓存）
 const fetchPlaceImage = async (
   city: string,
   placeName: string
 ): Promise<string> => {
+  const cacheKey = `${city}-${placeName}`;
+  
+  // 检查缓存
+  if (imageCache.has(cacheKey)) {
+    console.log(`使用缓存图片: ${placeName}`);
+    return imageCache.get(cacheKey)!;
+  }
+
   const amapUrl = `https://restapi.amap.com/v3/place/text?keywords=${encodeURIComponent(
     placeName
   )}&city=${encodeURIComponent(city)}&extensions=all&key=${AMAP_API_KEY}`;
 
-  const fetchWithTimeout = async (
-    url: string,
-    options: RequestInit = {},
-    timeout = 5000
-  ) => {
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
-      clearTimeout(id);
-
-      // 检查响应状态
-      if (!response.ok) {
-        throw new Error(`请求失败，状态码: ${response.status}`);
-      }
-
-      return response;
-    } catch (error) {
-      clearTimeout(id);
-      throw error;
-    }
-  };
-
   try {
-    const response = await fetchWithTimeout(amapUrl, {}, 3000);
+    const response = await fetchWithTimeout(amapUrl, {}, 1500);
     const data = await response.json();
 
     if (data.status === "1" && data.pois?.length > 0) {
       const photos = data.pois[0].photos || [];
       if (photos.length > 0) {
-        return photos[0].url;
+        const imageUrl = photos[0].url;
+        imageCache.set(cacheKey, imageUrl);
+        return imageUrl;
       }
     }
   } catch (error) {
-    console.error(`高德 API 获取 ${placeName} 图片失败，切换备用API`, error);
+    console.error(`高德 API 获取 ${placeName} 图片失败`, error);
   }
 
+  // 备用 API
   const backupApiUrl = `https://cn.apihz.cn/api/img/apihzimgbaidu.php?id=${IMAGE_API_ID}&key=${IMAGE_API_KEY}&words=${encodeURIComponent(
     placeName
   )}&limit=1&page=1`;
 
   try {
-    const backupResponse = await fetchWithTimeout(backupApiUrl, {}, 3000);
+    const backupResponse = await fetchWithTimeout(backupApiUrl, {}, 1500);
     const backupData = await backupResponse.json();
     if (backupData.code === 200 && backupData.res?.length > 0) {
-      return backupData.res[0];
+      const imageUrl = backupData.res[0];
+      imageCache.set(cacheKey, imageUrl);
+      return imageUrl;
     }
   } catch (backupError) {
     console.error(`备用API获取 ${placeName} 图片失败:`, backupError);
   }
 
+  // 缓存默认图片
+  imageCache.set(cacheKey, "/default.jpg");
   return "/default.jpg";
+};
+
+// 并行获取所有景点图片 - 优化版本，带总体超时控制
+const fetchAllPlaceImages = async (
+  city: string,
+  itinerary: { day: number; places: Place[] }[]
+): Promise<{ day: number; places: Place[] }[]> => {
+  // 收集所有需要获取图片的地点
+  const allPlaces: { dayIndex: number; placeIndex: number; place: Place }[] = [];
+  
+  itinerary.forEach((day, dayIndex) => {
+    day.places.forEach((place, placeIndex) => {
+      allPlaces.push({ dayIndex, placeIndex, place });
+    });
+  });
+
+  console.log(`开始并行获取 ${allPlaces.length} 个地点的图片...`);
+  const startTime = Date.now();
+
+  // 设置总体超时时间为 15 秒（千问 API 可能占用较长时间）
+  const TOTAL_TIMEOUT = 15000;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('图片获取总体超时')), TOTAL_TIMEOUT);
+  });
+
+  // 图片获取任务
+  const fetchTask = async () => {
+    // 增加并发数到 10，减少总体时间
+    const batchSize = 10;
+    for (let i = 0; i < allPlaces.length; i += batchSize) {
+      const batch = allPlaces.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async ({ dayIndex, placeIndex, place }) => {
+          const image = await fetchPlaceImage(city, place.name);
+          itinerary[dayIndex].places[placeIndex].image = image;
+        })
+      );
+      console.log(`已完成 ${Math.min(i + batchSize, allPlaces.length)}/${allPlaces.length} 个地点`);
+    }
+    return itinerary;
+  };
+
+  try {
+    const result = await Promise.race([fetchTask(), timeoutPromise]);
+    const endTime = Date.now();
+    console.log(`图片获取完成，耗时: ${(endTime - startTime) / 1000}秒`);
+    return result;
+  } catch (error) {
+    console.warn('图片获取超时或失败，使用默认图片:', error);
+    // 超时后，为所有未设置图片的地点设置默认图片
+    allPlaces.forEach(({ dayIndex, placeIndex, place }) => {
+      if (!itinerary[dayIndex].places[placeIndex].image) {
+        itinerary[dayIndex].places[placeIndex].image = "/default.jpg";
+      }
+    });
+    return itinerary;
+  }
 };
 
 export async function GET(req: Request) {
@@ -250,7 +320,6 @@ export async function GET(req: Request) {
   let keyword = url.searchParams.get("keyword") || "";
   const days = Math.max(parseInt(url.searchParams.get("days") || "1", 10), 1);
 
-  // 从 session 获取用户信息
   const session = await getServerSession(authOptions);
   if (!session || !session.user?.id) {
     return new Response(JSON.stringify({ message: "未登录或会话无效" }), {
@@ -279,7 +348,6 @@ export async function GET(req: Request) {
       });
     }
 
-    // 检查用户已有的总行程数量
     const totalItineraries = await prisma.itinerary.count({
       where: { userId },
     });
@@ -294,21 +362,16 @@ export async function GET(req: Request) {
       );
     }
 
+    const startTime = Date.now();
+    
+    // 1. 获取行程数据
     let itinerary = await getRecommendedPlacesFromQwen(city, keyword, days);
     console.log(`API 生成的行程天数: ${itinerary.length}`);
 
-    let updatedItinerary = await Promise.all(
-      itinerary.map(async (day) => {
-        const updatedPlaces = await Promise.all(
-          day.places.map(async (place) => ({
-            ...place,
-            image: await fetchPlaceImage(city, place.name),
-          }))
-        );
-        return { day: day.day, places: updatedPlaces };
-      })
-    );
+    // 2. 并行获取所有图片
+    const updatedItinerary = await fetchAllPlaceImages(city, itinerary);
 
+    // 3. 保存到数据库
     const savedItinerary = await prisma.itinerary.create({
       data: {
         userId,
@@ -318,6 +381,8 @@ export async function GET(req: Request) {
       },
     });
 
+    const endTime = Date.now();
+    console.log(`总耗时: ${(endTime - startTime) / 1000}秒`);
     console.log(`最终返回的行程天数: ${updatedItinerary.length}`);
 
     return new Response(
@@ -330,9 +395,8 @@ export async function GET(req: Request) {
       {
         status: 200,
         headers: {
-          "Content-Type": "application/json", // 确保 Content-Type 是 JSON
-          "Cache-Control":
-            "no-store, no-cache, must-revalidate, proxy-revalidate",
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
         },
       }
     );
@@ -346,12 +410,10 @@ export async function GET(req: Request) {
       {
         status: 500,
         headers: {
-          "Content-Type": "application/json", // 确保 Content-Type 是 JSON
+          "Content-Type": "application/json",
         },
       }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }
 
@@ -397,7 +459,5 @@ export async function POST(req: Request) {
       JSON.stringify({ message: "更新旅游攻略失败", error: String(error) }),
       { status: 500 }
     );
-  } finally {
-    await prisma.$disconnect();
   }
 }
