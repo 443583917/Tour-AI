@@ -1,5 +1,5 @@
 import { NextApiRequest, NextApiResponse } from "next";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import prisma from "@/lib/prisma";
@@ -376,7 +376,7 @@ export async function GET(req: Request) {
       data: {
         userId,
         city,
-        schedule: updatedItinerary,
+        schedule: updatedItinerary as unknown as Prisma.InputJsonValue,
         generatedAt: new Date(),
       },
     });
